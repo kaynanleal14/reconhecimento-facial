@@ -1,0 +1,6 @@
+# Dependências do projeto para a TV Box (Armbian ARM32)
+# Nota: opencv-python e numpy NÃO ficam ativos aqui pois são instalados
+# via apt no Linux para evitar compilação pesada (sudo apt install python3-opencv python3-numpy)
+
+customtkinter
+pillow

@@ -1,30 +1,38 @@
+import os
 import cv2
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 
 
 class FaceDetector:
+
     def __init__(
         self,
-        model_path="models/blaze_face_short_range.tflite",
-        min_detection_confidence=0.6
+        model_path="models/face_detection_yunet_2023mar.onnx",
+        min_detection_confidence=0.6,
     ):
-        base_options = python.BaseOptions(
-            model_asset_path=model_path
-        )
+        # Resolve o caminho do modelo para funcionar tanto no Windows quanto no Linux/Armbian
+        if not os.path.isabs(model_path) and not os.path.exists(model_path):
+            base_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..")
+            )
+            alt_path = os.path.join(base_dir, model_path)
+            if os.path.exists(alt_path):
+                model_path = alt_path
 
-        options = vision.FaceDetectorOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.IMAGE,
-            min_detection_confidence=min_detection_confidence
-        )
+        self.model_path = model_path
+        self.min_detection_confidence = min_detection_confidence
 
-        self.detector = vision.FaceDetector.create_from_options(options)
+        # Inicializa o detector YuNet nativo do OpenCV
+        self.detector = cv2.FaceDetectorYN.create(
+            model=self.model_path,
+            config="",
+            input_size=(320, 320),  # Tamanho inicial (atualizado no detect)
+            score_threshold=self.min_detection_confidence,
+            nms_threshold=0.3,
+            top_k=5000,
+        )
 
     def detect(self, frame):
-        """
-        Recebe um frame BGR do OpenCV.
+        """Recebe um frame BGR do OpenCV.
 
         Retorna:
         [
@@ -34,59 +42,42 @@ class FaceDetector:
             }
         ]
         """
+        if frame is None:
+            return []
 
-        # OpenCV trabalha em BGR.
-        # MediaPipe espera RGB.
-        rgb_frame = cv2.cvtColor(
-            frame,
-            cv2.COLOR_BGR2RGB
-        )
+        frame_height, frame_width = frame.shape[:2]
 
-        # Converte numpy array -> MediaPipe Image
-        mp_image = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=rgb_frame
-        )
+        # Atualiza a resolução de entrada do YuNet para a resolução atual do frame
+        self.detector.setInputSize((frame_width, frame_height))
 
-        # Executa detecção
-        result = self.detector.detect(mp_image)
+        # Executa a detecção nativa do OpenCV
+        _, results = self.detector.detect(frame)
 
         faces = []
 
-        for detection in result.detections:
+        if results is not None:
+            for face in results:
+                # O YuNet retorna os 4 primeiros valores como [x, y, w, h]
+                x, y, w, h = map(int, face[:4])
 
-            bbox = detection.bounding_box
+                # O índice 14 contém a pontuação de confiança (score)
+                confidence = float(face[14])
 
-            x = bbox.origin_x
-            y = bbox.origin_y
-            w = bbox.width
-            h = bbox.height
+                # Evita coordenadas negativas
+                x = max(0, x)
+                y = max(0, y)
 
-            # Evita coordenadas negativas
-            x = max(0, x)
-            y = max(0, y)
+                # Garante que o retângulo não ultrapasse os limites da imagem
+                w = min(w, frame_width - x)
+                h = min(h, frame_height - y)
 
-            # Limites da imagem
-            frame_height, frame_width, _ = frame.shape
-
-            w = min(w, frame_width - x)
-            h = min(h, frame_height - y)
-
-            # Confiança
-            confidence = 0.0
-
-            if detection.categories:
-                confidence = detection.categories[0].score
-
-            faces.append({
-                "bbox": (x, y, w, h),
-                "confidence": confidence
-            })
+                faces.append(
+                    {"bbox": (x, y, w, h), "confidence": confidence}
+                )
 
         return faces
 
     def crop_face(self, frame, face, margin=0.20):
-
         x, y, w, h = face["bbox"]
 
         frame_height, frame_width = frame.shape[:2]
@@ -105,4 +96,5 @@ class FaceDetector:
         return cropped_face
 
     def close(self):
-        self.detector.close()
+        # Mantido para compatibilidade com chamadas antigas no app.py
+        pass

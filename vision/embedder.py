@@ -1,73 +1,43 @@
+import os
 import cv2
 import numpy as np
-import tensorflow as tf
 
 
 class FaceEmbedder:
 
-    def __init__(self, model_path="models/mobilefacenet.tflite"):
+    def __init__(
+        self, model_path="models/face_recognition_sface_2021dec.onnx"
+    ):
+        # Resolve o caminho do modelo para Windows e Linux
+        if not os.path.isabs(model_path) and not os.path.exists(model_path):
+            base_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..")
+            )
+            alt_path = os.path.join(base_dir, model_path)
+            if os.path.exists(alt_path):
+                model_path = alt_path
 
-        self.interpreter = tf.lite.Interpreter(
-            model_path=model_path
+        self.model_path = model_path
+        self.recognizer = cv2.FaceRecognizerSF.create(
+            model=self.model_path, config=""
         )
 
-        self.interpreter.allocate_tensors()
-
-        self.input_details = self.interpreter.get_input_details()
-        self.output_details = self.interpreter.get_output_details()
-
-        # Descobre automaticamente o tamanho esperado
-        input_shape = self.input_details[0]["shape"]
-
-        self.input_height = int(input_shape[1])
-        self.input_width = int(input_shape[2])
-
-        print("Modelo de embedding carregado")
-        print("Input:", self.input_details[0]["shape"])
-        print("Output:", self.output_details[0]["shape"])
-
-    def preprocess(self, face):
-
-        # BGR -> RGB
-        face = cv2.cvtColor(
-            face,
-            cv2.COLOR_BGR2RGB
-        )
-
-        # Tamanho esperado pelo modelo
-        face = cv2.resize(
-            face,
-            (self.input_width, self.input_height)
-        )
-
-        face = face.astype(np.float32)
-
-        # Normalização típica do MobileFaceNet: [-1, 1]
-        face = (face - 127.5) / 127.5
-
-        # [H, W, 3] -> [1, H, W, 3]
-        face = np.expand_dims(face, axis=0)
-
-        return face
+        print("Modelo SFace (ONNX) carregado via OpenCV nativo")
 
     def generate(self, face):
+        """Gera o vetor de embedding de 128 elementos a partir do corte do rosto."""
+        if face is None or face.size == 0:
+            return np.zeros(128, dtype=np.float32)
 
-        input_data = self.preprocess(face)
+        # Redimensiona o recorte do rosto para 112x112
+        face_resized = cv2.resize(face, (112, 112))
 
-        self.interpreter.set_tensor(
-            self.input_details[0]["index"],
-            input_data
-        )
-
-        self.interpreter.invoke()
-
-        embedding = self.interpreter.get_tensor(
-            self.output_details[0]["index"]
-        )[0]
+        # Extrai as características faciais
+        embedding = self.recognizer.feature(face_resized)
+        embedding = embedding.flatten()
 
         # Normalização L2
         norm = np.linalg.norm(embedding)
-
         if norm > 0:
             embedding = embedding / norm
 
